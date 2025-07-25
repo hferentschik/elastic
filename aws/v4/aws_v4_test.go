@@ -12,7 +12,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 
 	"github.com/olivere/elastic/v7"
 )
@@ -49,7 +49,7 @@ func TestSigningClient(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cred := credentials.NewStaticCredentials("dev", "secret", "")
+	cred := credentials.NewStaticCredentialsProvider("dev", "secret", "")
 	// Don't do this in production!
 	insecureHttpClient := &http.Client{
 		Transport: &http.Transport{

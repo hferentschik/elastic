@@ -7,28 +7,27 @@ package v4
 import (
 	"bytes"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	v4 "github.com/aws/aws-sdk-go/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 )
 
 // NewV4SigningClient returns an *http.Client that will sign all requests with AWS V4 Signing.
-func NewV4SigningClient(creds *credentials.Credentials, region string) *http.Client {
+func NewV4SigningClient(creds aws.CredentialsProvider, region string) *http.Client {
 	return NewV4SigningClientWithHTTPClient(creds, region, http.DefaultClient)
 }
 
 // NewV4SigningClientWithHTTPClient returns an *http.Client that will sign all requests with AWS V4 Signing.
-func NewV4SigningClientWithHTTPClient(creds *credentials.Credentials, region string, httpClient *http.Client) *http.Client {
+func NewV4SigningClientWithHTTPClient(creds aws.CredentialsProvider, region string, httpClient *http.Client) *http.Client {
 	return &http.Client{
 		Transport: Transport{
 			client: httpClient,
 			creds:  creds,
-			signer: v4.NewSigner(creds),
+			signer: v4.NewSigner(),
 			region: region,
 		},
 	}
@@ -37,7 +36,7 @@ func NewV4SigningClientWithHTTPClient(creds *credentials.Credentials, region str
 // Transport is a RoundTripper that will sign requests with AWS V4 Signing
 type Transport struct {
 	client *http.Client
-	creds  *credentials.Credentials
+	creds  aws.CredentialsProvider
 	signer *v4.Signer
 	region string
 }
@@ -57,21 +56,26 @@ func (st Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	now := time.Now().UTC()
 	req.Header.Set("Date", now.Format(time.RFC3339))
 
-	var err error
+	ctx := req.Context()
+	creds, err := st.creds.Retrieve(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	switch req.Body {
 	case nil:
-		_, err = st.signer.Sign(req, nil, "es", st.region, now)
+		err = st.signer.SignHTTP(ctx, creds, req, "", "es", st.region, now)
 	default:
-		switch body := req.Body.(type) {
-		case io.ReadSeeker:
-			_, err = st.signer.Sign(req, body, "es", st.region, now)
-		default:
-			buf, err := ioutil.ReadAll(req.Body)
+		if _, ok := req.Body.(io.ReadSeeker); ok {
+			// For ReadSeeker bodies, we can sign directly
+			err = st.signer.SignHTTP(ctx, creds, req, "", "es", st.region, now)
+		} else {
+			buf, err := io.ReadAll(req.Body)
 			if err != nil {
 				return nil, err
 			}
-			req.Body = ioutil.NopCloser(bytes.NewReader(buf))
-			_, err = st.signer.Sign(req, bytes.NewReader(buf), "es", st.region, time.Now().UTC())
+			req.Body = io.NopCloser(bytes.NewReader(buf))
+			err = st.signer.SignHTTP(ctx, creds, req, "", "es", st.region, now)
 		}
 	}
 	if err != nil {
