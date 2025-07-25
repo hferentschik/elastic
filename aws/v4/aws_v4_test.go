@@ -12,7 +12,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 
 	"github.com/olivere/elastic/v7"
 )
@@ -49,7 +49,7 @@ func TestSigningClient(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cred := credentials.NewStaticCredentials("dev", "secret", "")
+	cred := credentials.NewStaticCredentialsProvider("dev", "secret", "")
 	// Don't do this in production!
 	insecureHttpClient := &http.Client{
 		Transport: &http.Transport{
@@ -91,9 +91,4 @@ func TestSigningClient(t *testing.T) {
 	if have := req.Header.Get("X-Amz-Date"); have == "" {
 		t.Fatal("expected X-Amz-Date header")
 	}
-	/*
-		if want, have := `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`, req.Header.Get("X-Amz-Content-Sha256"); want != have {
-			t.Fatalf("want header of X-Amz-Content-Sha256=%q, have %q", want, have)
-		}
-	*/
 }
