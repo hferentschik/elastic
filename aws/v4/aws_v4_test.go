@@ -91,9 +91,4 @@ func TestSigningClient(t *testing.T) {
 	if have := req.Header.Get("X-Amz-Date"); have == "" {
 		t.Fatal("expected X-Amz-Date header")
 	}
-	/*
-		if want, have := `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`, req.Header.Get("X-Amz-Content-Sha256"); want != have {
-			t.Fatalf("want header of X-Amz-Content-Sha256=%q, have %q", want, have)
-		}
-	*/
 }

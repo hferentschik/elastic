@@ -6,80 +6,84 @@ package v4
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 )
 
+const (
+	// service constants for the service to be signed.
+	service = "es"
+)
+
 // NewV4SigningClient returns an *http.Client that will sign all requests with AWS V4 Signing.
 func NewV4SigningClient(creds aws.CredentialsProvider, region string) *http.Client {
-	return NewV4SigningClientWithHTTPClient(creds, region, http.DefaultClient)
+	return NewV4SigningClientWithHTTPClient(creds, region, &http.Client{})
 }
 
 // NewV4SigningClientWithHTTPClient returns an *http.Client that will sign all requests with AWS V4 Signing.
 func NewV4SigningClientWithHTTPClient(creds aws.CredentialsProvider, region string, httpClient *http.Client) *http.Client {
 	return &http.Client{
 		Transport: Transport{
-			client: httpClient,
-			creds:  creds,
-			signer: v4.NewSigner(),
-			region: region,
+			client:  httpClient,
+			creds:   creds,
+			signer:  v4.NewSigner(),
+			region:  region,
+			service: service,
 		},
 	}
 }
 
 // Transport is a RoundTripper that will sign requests with AWS V4 Signing
 type Transport struct {
-	client *http.Client
-	creds  aws.CredentialsProvider
-	signer *v4.Signer
-	region string
+	client  *http.Client
+	creds   aws.CredentialsProvider
+	signer  *v4.Signer
+	region  string
+	service string
 }
 
-// RoundTrip uses the underlying RoundTripper transport, but signs request first with AWS V4 Signing
-func (st Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if h, ok := req.Header["Authorization"]; ok && len(h) > 0 && strings.HasPrefix(h[0], "AWS4") {
-		// Received a signed request, just pass it on.
-		return st.client.Do(req)
+func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	payloadHash, newReader, err := hashPayload(req.Body)
+	if err != nil {
+		return nil, err
 	}
+	req.Body = newReader
 
-	if strings.Contains(req.URL.RawPath, "%2C") {
-		// Escaping path
-		req.URL.RawPath = url.PathEscape(req.URL.RawPath)
+	ctx := req.Context()
+	creds, err := t.creds.Retrieve(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
 	req.Header.Set("Date", now.Format(time.RFC3339))
-
-	ctx := req.Context()
-	creds, err := st.creds.Retrieve(ctx)
+	err = t.signer.SignHTTP(ctx, creds, req, payloadHash, t.service, t.region, now)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error signing request: %w", err)
 	}
+	return t.client.Do(req)
+}
 
-	switch req.Body {
-	case nil:
-		err = st.signer.SignHTTP(ctx, creds, req, "", "es", st.region, now)
-	default:
-		if _, ok := req.Body.(io.ReadSeeker); ok {
-			// For ReadSeeker bodies, we can sign directly
-			err = st.signer.SignHTTP(ctx, creds, req, "", "es", st.region, now)
-		} else {
-			buf, err := io.ReadAll(req.Body)
-			if err != nil {
-				return nil, err
-			}
-			req.Body = io.NopCloser(bytes.NewReader(buf))
-			err = st.signer.SignHTTP(ctx, creds, req, "", "es", st.region, now)
+func hashPayload(r io.ReadCloser) (payloadHash string, newReader io.ReadCloser, err error) {
+	var payload []byte
+	if r == nil {
+		payload = []byte("")
+	} else {
+		payload, err = ioutil.ReadAll(r)
+		if err != nil {
+			return
 		}
+		newReader = ioutil.NopCloser(bytes.NewReader(payload))
 	}
-	if err != nil {
-		return nil, err
-	}
-	return st.client.Do(req)
+	hash := sha256.Sum256(payload)
+	payloadHash = hex.EncodeToString(hash[:])
+	return
 }
